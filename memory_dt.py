@@ -11,8 +11,8 @@ from pomdp_envs.velocity_cartpole import VelocityCartPoleEnv
 from pomdp_envs.flickering_pendulum import FlickeringPendulumEnv
 from pomdp_envs.lidar_mountain_car import LiDARMountainCarEnv
 from timekan.models.tkan_lstm import tKANLSTM
-from kan import KAN
-# from efficient_kan import KAN
+# from kan import KAN
+from efficient_kan import KAN
 
 import matplotlib.pyplot as plt
 
@@ -45,7 +45,7 @@ class KANLSTMLayer(nn.Module):
         o = self.out_gate(x, h)
         ct = f * c + i * g
         ht = o * torch.tanh(c)
-        return o, (ht, ct)
+        return ht, ct
 
 
 class KANLSTM(nn.Module):
@@ -58,32 +58,64 @@ class KANLSTM(nn.Module):
             self.layers.append(KANLSTMLayer(input_size, hidden_size))
 
     def forward(self, x, hx=None):
-        batch_size = x.shape[0]
+        if x.dim() == 2:
+            x = x.unsqueeze(dim=1)
+        batch_size, seq_len, _ = x.shape
+        
         if hx is None:
-            h_zeros = torch.zeros(
-                batch_size,
-                self.num_layers,
-                self.hidden_size,
-                dtype=x.dtype,
-                device=x.device,
-            )
-            c_zeros = torch.zeros(
-                batch_size,
-                self.num_layers,
-                self.hidden_size,
-                dtype=x.dtype,
-                device=x.device,
-            )
-            hx = (h_zeros, c_zeros)
-        out = torch.zeros_like(x)
-        h_out = torch.zeros_like(hx[0])
-        c_out = torch.zeros_like(hx[1])
-        for i, layer in enumerate(self.layers):
-            x_i, hx_i = layer(x[:, i, :], (hx[0][:, i, :], hx[1][:, i, :]))
-            out[:, i, :] = x_i
-            h_out[:, i, :] = hx_i[0]
-            c_out[:, i, :] = hx_i[1]
-        return out, (h_out, c_out)
+            h = [torch.zeros(batch_size, self.hidden_size) for _ in range(self.num_layers)]
+            c = [torch.zeros(batch_size, self.hidden_size) for _ in range(self.num_layers)]
+        else:
+            h, c = hx  # каждый список из num_layers тензоров
+        
+        # # Список для выходов последнего слоя по всем шагам
+        
+        for t in range(seq_len):
+            x_t = x[:, t, :]            
+            for layer_idx, lstm_cell in enumerate(self.layers):
+                if layer_idx == 0:
+                    h[layer_idx], c[layer_idx] = lstm_cell(x_t, (h[layer_idx], c[layer_idx]))
+                else:
+                    h[layer_idx], c[layer_idx] = lstm_cell(h[layer_idx-1], (h[layer_idx], c[layer_idx]))
+            
+            output = h[-1].unsqueeze(1)
+        # output = torch.cat(outputs, dim=1)   # (batch, seq_len, hidden_size)
+        hn = torch.stack(h, dim=0)           # (num_layers, batch, hidden_size)
+        cn = torch.stack(c, dim=0)
+        
+        return output, (hn, cn)
+        # if x.dim() == 3:
+        #     batch_size = x.shape[0]
+        # if x.dim() == 2:
+        #     batch_size = 1
+        #     x = x.unsqueeze(dim=1)
+        # if hx is None:
+        #     h_zeros = torch.zeros(
+        #         batch_size,
+        #         self.num_layers,
+        #         self.hidden_size,
+        #         dtype=x.dtype,
+        #         device=x.device,
+        #     )
+        #     c_zeros = torch.zeros(
+        #         batch_size,
+        #         self.num_layers,
+        #         self.hidden_size,
+        #         dtype=x.dtype,
+        #         device=x.device,
+        #     )
+        #     hx = (h_zeros, c_zeros)
+        # out = torch.zeros_like(x)
+        # h_out = torch.zeros_like(hx[0])
+        # c_out = torch.zeros_like(hx[1])
+        # for i, layer in enumerate(self.layers):
+        #     if i >= x.shape[1]:
+        #         break
+        #     x_i, hx_i = layer(x[:, i, :], (hx[0][:, i, :], hx[1][:, i, :]))
+        #     out[:, i, :] = x_i
+        #     h_out[:, i, :] = hx_i[0]
+        #     c_out[:, i, :] = hx_i[1]
+        # return out, (h_out, c_out)
 
 
 class POMDPDataset(Dataset):
