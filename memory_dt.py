@@ -28,6 +28,7 @@ class KANLSTMCell(nn.Module):
         h = self.hidden_kan(h)
         return x + h
 
+
 class KANLSTMLayer(nn.Module):
     def __init__(self, input_size, hidden_size):
         super(KANLSTMLayer, self).__init__()
@@ -66,10 +67,8 @@ class KANLSTM(nn.Module):
             h = [torch.zeros(batch_size, self.hidden_size) for _ in range(self.num_layers)]
             c = [torch.zeros(batch_size, self.hidden_size) for _ in range(self.num_layers)]
         else:
-            h, c = hx  # каждый список из num_layers тензоров
-        
-        # # Список для выходов последнего слоя по всем шагам
-        
+            h, c = hx
+                
         for t in range(seq_len):
             x_t = x[:, t, :]            
             for layer_idx, lstm_cell in enumerate(self.layers):
@@ -78,44 +77,8 @@ class KANLSTM(nn.Module):
                 else:
                     h[layer_idx], c[layer_idx] = lstm_cell(h[layer_idx-1], (h[layer_idx], c[layer_idx]))
             
-            output = h[-1].unsqueeze(1)
-        # output = torch.cat(outputs, dim=1)   # (batch, seq_len, hidden_size)
-        hn = torch.stack(h, dim=0)           # (num_layers, batch, hidden_size)
-        cn = torch.stack(c, dim=0)
-        
-        return output, (hn, cn)
-        # if x.dim() == 3:
-        #     batch_size = x.shape[0]
-        # if x.dim() == 2:
-        #     batch_size = 1
-        #     x = x.unsqueeze(dim=1)
-        # if hx is None:
-        #     h_zeros = torch.zeros(
-        #         batch_size,
-        #         self.num_layers,
-        #         self.hidden_size,
-        #         dtype=x.dtype,
-        #         device=x.device,
-        #     )
-        #     c_zeros = torch.zeros(
-        #         batch_size,
-        #         self.num_layers,
-        #         self.hidden_size,
-        #         dtype=x.dtype,
-        #         device=x.device,
-        #     )
-        #     hx = (h_zeros, c_zeros)
-        # out = torch.zeros_like(x)
-        # h_out = torch.zeros_like(hx[0])
-        # c_out = torch.zeros_like(hx[1])
-        # for i, layer in enumerate(self.layers):
-        #     if i >= x.shape[1]:
-        #         break
-        #     x_i, hx_i = layer(x[:, i, :], (hx[0][:, i, :], hx[1][:, i, :]))
-        #     out[:, i, :] = x_i
-        #     h_out[:, i, :] = hx_i[0]
-        #     c_out[:, i, :] = hx_i[1]
-        # return out, (h_out, c_out)
+            output = h[-1].unsqueeze(1)        
+        return output, (h, c)
 
 
 class POMDPDataset(Dataset):
