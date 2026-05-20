@@ -11,7 +11,6 @@ from pomdp_envs.velocity_cartpole import VelocityCartPoleEnv
 from pomdp_envs.flickering_pendulum import FlickeringPendulumEnv
 from pomdp_envs.lidar_mountain_car import LiDARMountainCarEnv
 from timekan.models.tkan_lstm import tKANLSTM
-# from kan import KAN
 from efficient_kan import KAN
 
 import matplotlib.pyplot as plt
