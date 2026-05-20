@@ -10,8 +10,74 @@ import gymnasium as gym
 from pomdp_envs.velocity_cartpole import VelocityCartPoleEnv
 from pomdp_envs.flickering_pendulum import FlickeringPendulumEnv
 from pomdp_envs.lidar_mountain_car import LiDARMountainCarEnv
+from timekan.models.tkan_lstm import tKANLSTM
+from efficient_kan import KAN
 
 import matplotlib.pyplot as plt
+
+
+class KANLSTMCell(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(KANLSTMCell, self).__init__()
+        self.input_kan = KAN([input_size, hidden_size])
+        self.hidden_kan = KAN([input_size, hidden_size])
+
+    def forward(self, x, h):
+        x = self.input_kan(x)
+        h = self.hidden_kan(h)
+        return x + h
+
+
+class KANLSTMLayer(nn.Module):
+    def __init__(self, input_size, hidden_size):
+        super(KANLSTMLayer, self).__init__()
+
+        self.input_cell = KANLSTMCell(input_size, hidden_size)
+        self.forget_cell = KANLSTMCell(input_size, hidden_size)
+        self.gate1 = KANLSTMCell(input_size, hidden_size)
+        self.out_gate = KANLSTMCell(input_size, hidden_size)
+    
+    def forward(self, x, hx):
+        h, c = hx
+        i = self.input_cell(x, h)
+        f = self.forget_cell(x, h)
+        g = self.gate1(x, h)
+        o = self.out_gate(x, h)
+        ct = f * c + i * g
+        ht = o * torch.tanh(c)
+        return ht, ct
+
+
+class KANLSTM(nn.Module):
+    def __init__(self, input_size, hidden_size, num_layers=1):
+        super(KANLSTM, self).__init__()
+        self.num_layers = num_layers
+        self.hidden_size = hidden_size
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers):
+            self.layers.append(KANLSTMLayer(input_size, hidden_size))
+
+    def forward(self, x, hx=None):
+        if x.dim() == 2:
+            x = x.unsqueeze(dim=1)
+        batch_size, seq_len, _ = x.shape
+        
+        if hx is None:
+            h = [torch.zeros(batch_size, self.hidden_size) for _ in range(self.num_layers)]
+            c = [torch.zeros(batch_size, self.hidden_size) for _ in range(self.num_layers)]
+        else:
+            h, c = hx
+                
+        for t in range(seq_len):
+            x_t = x[:, t, :]            
+            for layer_idx, lstm_cell in enumerate(self.layers):
+                if layer_idx == 0:
+                    h[layer_idx], c[layer_idx] = lstm_cell(x_t, (h[layer_idx], c[layer_idx]))
+                else:
+                    h[layer_idx], c[layer_idx] = lstm_cell(h[layer_idx-1], (h[layer_idx], c[layer_idx]))
+            
+            output = h[-1].unsqueeze(1)        
+        return output, (h, c)
 
 
 class POMDPDataset(Dataset):
@@ -130,10 +196,17 @@ class MemoryDecisionTransformer(nn.Module):
         
         # Memory module (optional)
         if memory_type == 'gru':
-            # TODO: Implement GRU memory
+            self.memory = nn.GRU(input_size=n_embed, hidden_size=memory_dim, num_layers=self.context_length, batch_first=True)
             self.memory_proj = nn.Linear(memory_dim, n_embed)
         elif memory_type == 'lstm':
-            # TODO: Implement LSTM memory
+            self.memory = nn.LSTM(input_size=n_embed, hidden_size=memory_dim, num_layers=self.context_length, batch_first=True)
+            self.memory_proj = nn.Linear(memory_dim, n_embed)
+        elif memory_type == 'tkan':
+            self.memory = tKANLSTM(input_dim=n_embed, hidden_dim=memory_dim, return_sequences=True)
+            self.memory_proj = nn.Linear(memory_dim, n_embed)
+        elif memory_type == 'kanlstm':
+            self.memory = KANLSTM(input_size=n_embed, hidden_size=memory_dim, num_layers=self.context_length)
+
             self.memory_proj = nn.Linear(memory_dim, n_embed)
         else:
             self.memory = None
@@ -175,7 +248,6 @@ class MemoryDecisionTransformer(nn.Module):
         # make sure rtgs is [batch, seq, 1]
         if rtgs.dim() == 2:
             rtgs = rtgs.unsqueeze(-1)
-        
         # encoding inputs
         state_embeddings = self.state_encoder(states)
         action_embeddings = self.action_encoder(actions)
@@ -185,12 +257,19 @@ class MemoryDecisionTransformer(nn.Module):
         if self.memory is not None:
             if self.memory_type == 'gru':
                 if self.hidden_state is None:
-                    # TODO: Implement GRU memory
+                    memory_out, self.hidden_state = self.memory(state_embeddings)
                 
                 memory_out, self.hidden_state = self.memory(state_embeddings, self.hidden_state)
             elif self.memory_type == 'lstm':
                 if self.hidden_state is None:
-                    # TODO: Implement LSTM memory
+                    memory_out, self.hidden_state = self.memory(state_embeddings)
+                
+                memory_out, self.hidden_state = self.memory(state_embeddings, self.hidden_state)
+            elif self.memory_type == 'tkan':
+                memory_out = self.memory(state_embeddings)
+            elif self.memory_type == 'kanlstm':
+                if self.hidden_state is None:
+                    memory_out, self.hidden_state = self.memory(state_embeddings)
                 
                 memory_out, self.hidden_state = self.memory(state_embeddings, self.hidden_state)
             
